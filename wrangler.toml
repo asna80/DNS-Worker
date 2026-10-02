@@ -231,6 +231,9 @@ PRESET_ECH_FRONTING_DOMAINS = """
   "www.cloudflare.com",
   "encryptedsni.com",
   "cdnjs.com"
+  "uet.edu.pk"
+  "su.edu.ph"
+  "iucn.org"
 ]
 """
 
