@@ -134,6 +134,10 @@ DOMAIN_ROLLUP_MIN_COUNT=2
 PRESET_UPSTREAMS = """
 [
   {
+    "label": "odoh",
+    "url": "https://odoh.cloudflare-dns.com/dns-query"
+  },
+  {
     "label": "settings.presetCloudflareSecurity",
     "url": "https://security.cloudflare-dns.com/dns-query"
   },
@@ -184,6 +188,14 @@ PRESET_UPSTREAMS = """
   {
     "label": "Google (8.8.8.8)",
     "url": "tcp://8.8.8.8:53"
+  },
+  {
+    "label": "osaka",
+    "url": "https://jp-kix.doh.sb/dns-query"
+  },
+  {
+    "label": "hongkong",
+    "url": "https://hk-hkg.doh.sb/dns-query"
   }
 ]
 """
