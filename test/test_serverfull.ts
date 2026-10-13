@@ -66,18 +66,26 @@ async function runTests() {
   const tlsKeyPath = path.join(testDir, 'dot_test_key.pem');
   const tlsCertPath = path.join(testDir, 'dot_test_cert.pem');
 
-  let opensslBin = 'openssl';
-  if (process.platform === 'win32') {
-    const gitOpenssl = 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe';
-    if (fs.existsSync(gitOpenssl)) {
-      opensslBin = `"${gitOpenssl}"`;
-    }
-  }
+  const fixtureKeyPath = path.join(__dirname, 'fixtures', 'tls', 'test_key.pem');
+  const fixtureCertPath = path.join(__dirname, 'fixtures', 'tls', 'test_cert.pem');
 
-  // Use openssl to generate self-signed wildcard cert (*.dns.local)
-  execSync(`${opensslBin} req -x509 -newkey rsa:2048 -nodes -sha256 -keyout "${tlsKeyPath}" -out "${tlsCertPath}" -days 1 -subj "/CN=*.dns.local" -addext "subjectAltName=DNS:*.dns.local,DNS:dns.local"`, {
-    stdio: 'ignore'
-  });
+  if (fs.existsSync(fixtureKeyPath) && fs.existsSync(fixtureCertPath)) {
+    fs.copyFileSync(fixtureKeyPath, tlsKeyPath);
+    fs.copyFileSync(fixtureCertPath, tlsCertPath);
+  } else {
+    let opensslBin = 'openssl';
+    if (process.platform === 'win32') {
+      const gitOpenssl = 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe';
+      if (fs.existsSync(gitOpenssl)) {
+        opensslBin = `"${gitOpenssl}"`;
+      }
+    }
+
+    // Use openssl to generate self-signed wildcard cert (*.dns.local)
+    execSync(`${opensslBin} req -x509 -newkey rsa:2048 -nodes -sha256 -keyout "${tlsKeyPath}" -out "${tlsCertPath}" -days 1 -subj "/CN=*.dns.local" -addext "subjectAltName=DNS:*.dns.local,DNS:dns.local"`, {
+      stdio: 'ignore'
+    });
+  }
 
   const env: Env = {
     DB: db,
@@ -151,7 +159,44 @@ async function runTests() {
   if (udpAnswers.length === 0 || !udpAnswers[0].data.includes('prof1')) {
     throw new Error(`Expected UDP TXT response containing 'prof1', got: ${JSON.stringify(udpAnswers)}`);
   }
-  console.log('>>> [TEST A] SUCCESS: Classic UDP DNS works!');
+  console.log('>>> [TEST A] SUCCESS: Classic UDP DNS with configured defaultProfileKey works!');
+
+  // ── TEST A2: Unauthenticated UDP DNS Query (Fallback to FAIL_OPEN_UPSTREAM) ──
+  console.log('\n>>> [TEST A2] Testing Unauthenticated UDP DNS (Fallback to FAIL_OPEN_UPSTREAM)...');
+  const UDP_UNAUTH_PORT = 15354;
+  const unauthEnv: Env = {
+    ...env,
+    SERVERFULL_DEFAULT_PROFILE_KEY: undefined
+  };
+  const unauthUdpServer = new UdpDnsServer({
+    port: UDP_UNAUTH_PORT,
+    host: '127.0.0.1',
+    defaultProfileKey: undefined,
+    env: unauthEnv
+  });
+  await unauthUdpServer.start();
+
+  const unauthSocket = dgram.createSocket('udp4');
+  const unauthQueryPacket = buildDNSQuery('obex', 'TXT');
+  const unauthPromise = new Promise<Buffer>((resolve, reject) => {
+    unauthSocket.on('message', (msg) => resolve(msg));
+    unauthSocket.on('error', reject);
+    unauthSocket.send(unauthQueryPacket, UDP_UNAUTH_PORT, '127.0.0.1');
+  });
+
+  const unauthRes = await unauthPromise;
+  unauthSocket.close();
+  await unauthUdpServer.stop();
+
+  const unauthAnswers = parseDNSAnswer(new Uint8Array(unauthRes));
+  console.log('>>> [TEST A2] Unauthenticated UDP Answers received:', unauthAnswers);
+  if (unauthAnswers.length === 0 || !unauthAnswers[0].data.includes('default')) {
+    throw new Error(`Expected UDP TXT response containing 'default', got: ${JSON.stringify(unauthAnswers)}`);
+  }
+  if (unauthAnswers[0].data.includes('prof1')) {
+    throw new Error(`CRITICAL: Unauthenticated UDP request hijacked user profile 'prof1'!`);
+  }
+  console.log('>>> [TEST A2] SUCCESS: Unauthenticated UDP DNS safely falls back to FAIL_OPEN_UPSTREAM without hijacking user profile!');
 
   // ── TEST B: DoT Query over TLS with SNI Profile Routing (Blocked Domain) ──
   console.log('\n>>> [TEST B] Testing DoT over TLS with SNI: testkey123.dns.local (Blocked domain: ad.test.com A)...');

@@ -9,8 +9,9 @@ import { Buffer } from 'node:buffer';
 import { Env, Context, ExecutionContext } from '../types';
 import { parseDNSQueryFromRaw } from '../utils/dns';
 import { pipeline } from '../pipeline';
-import { resolveDefaultProfile, resolveProfileByKey } from '../api/doh';
+import { resolveProfileByKey } from '../api/doh';
 import { resolveUpstreamEndpoint, fetchFromUpstream } from '../pipeline/resolver/transport';
+import { DEFAULT_FAIL_OPEN_UPSTREAM } from '../constants/presets';
 import { ACCESS_KEY_REGEX } from '../utils/validator';
 import { formatDiagnostic, formatPortError } from './format';
 import { inspectTlsCertificate, getCertbotCommand } from './cert';
@@ -265,7 +266,7 @@ export class DotDnsServer {
     } catch (err) {
       console.error('[DoT] Query processing exception:', err);
       try {
-        const failOpenUpstream = this.options.env.FAIL_OPEN_UPSTREAM || 'https://freedns.controld.com/no-ads-malware-typo';
+        const failOpenUpstream = this.options.env.FAIL_OPEN_UPSTREAM || DEFAULT_FAIL_OPEN_UPSTREAM;
         const endpoint = resolveUpstreamEndpoint(failOpenUpstream);
         const transportRes = await fetchFromUpstream(endpoint, rawMsg);
         if (!socket.destroyed && socket.writable) {

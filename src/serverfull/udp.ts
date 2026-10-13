@@ -10,6 +10,7 @@ import { parseDNSQueryFromRaw } from '../utils/dns';
 import { pipeline } from '../pipeline';
 import { resolveDefaultProfile, resolveProfileByKey } from '../api/doh';
 import { resolveUpstreamEndpoint, fetchFromUpstream } from '../pipeline/resolver/transport';
+import { DEFAULT_FAIL_OPEN_UPSTREAM } from '../constants/presets';
 import { formatPortError } from './format';
 
 export interface UdpServerOptions {
@@ -92,7 +93,7 @@ export class UdpDnsServer {
 
       // Determine profile:
       // 1. Configured default profile key
-      // 2. Database default / first profile fallback
+      // 2. Safe default profile fallback to FAIL_OPEN_UPSTREAM (log_retention_days: 0)
       let profile = null;
       if (this.options.defaultProfileKey) {
         profile = await resolveProfileByKey(this.options.defaultProfileKey, env, ctx);
@@ -145,7 +146,7 @@ export class UdpDnsServer {
     } catch (err) {
       console.error('[UDP DNS] Message handling exception:', err);
       try {
-        const failOpenUpstream = this.options.env.FAIL_OPEN_UPSTREAM || 'https://freedns.controld.com/no-ads-malware-typo';
+        const failOpenUpstream = this.options.env.FAIL_OPEN_UPSTREAM || DEFAULT_FAIL_OPEN_UPSTREAM;
         const rawBytes = new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength);
         const endpoint = resolveUpstreamEndpoint(failOpenUpstream);
         const transportRes = await fetchFromUpstream(endpoint, rawBytes);

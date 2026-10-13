@@ -46,12 +46,13 @@ function getPackageMeta(): PackageMeta {
  * @param args - Raw CLI arguments.
  * @returns Parsed options dictionary and subcommand.
  */
-function parseCliArgs(args: string[]): { command: string; repo: string; platforms: string; push: boolean } {
+function parseCliArgs(args: string[]): { command: string; repo: string; platforms: string; push: boolean; isAlpha: boolean } {
   const meta = getPackageMeta();
   let command = 'build';
   let repo = process.env.DOCKER_REPO || process.env.DOCKER_IMAGE || 'hugokoo/dns-worker';
   let platforms = process.env.DOCKER_PLATFORMS || 'linux/amd64,linux/arm64';
   let push = false;
+  let isAlpha = false;
 
   for (const arg of args) {
     if (arg === 'build' || arg === 'push' || arg === 'multiarch' || arg === 'run' || arg === 'help') {
@@ -62,12 +63,51 @@ function parseCliArgs(args: string[]): { command: string; repo: string; platform
       platforms = arg.slice('--platforms='.length).trim();
     } else if (arg === '--push') {
       push = true;
+    } else if (arg === '--alpha' || arg === '--canary') {
+      isAlpha = true;
     } else if (arg === '--help' || arg === '-h') {
       command = 'help';
     }
   }
 
-  return { command, repo, platforms, push };
+  return { command, repo, platforms, push, isAlpha };
+}
+
+/**
+ * Resolves short git commit SHA (7 chars).
+ *
+ * @returns Short commit hash.
+ */
+function getShortGitSha(): string {
+  try {
+    const res = spawnSync('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf-8' });
+    if (res.status === 0 && res.stdout) {
+      return res.stdout.trim();
+    }
+  } catch {}
+  return 'dev';
+}
+
+/**
+ * Generates Docker tags for release or alpha/canary preview channels.
+ *
+ * @param repo - Target image repository.
+ * @param version - Base package version.
+ * @param isAlpha - Whether to tag as alpha/canary channel.
+ * @returns Array of docker image tag strings.
+ */
+function getTags(repo: string, version: string, isAlpha: boolean): string[] {
+  if (isAlpha) {
+    const baseVer = version.split('-')[0];
+    const shortSha = getShortGitSha();
+    return [
+      `${repo}:alpha`,
+      `${repo}:canary`,
+      `${repo}:${baseVer}-alpha.${shortSha}`,
+      `${repo}:${baseVer}-canary.${shortSha}`
+    ];
+  }
+  return [`${repo}:latest`, `${repo}:${version}`, `${repo}:v${version}`];
 }
 
 /**
@@ -103,14 +143,17 @@ Package: ${meta.name} (v${meta.version})
 Runtime: Bun LTS (oven/bun:1-slim)
 
 \x1b[1mUsage:\x1b[0m
-  npm run docker:build      [-- --repo=<name>]             Build local Docker image
-  npm run docker:multiarch  [-- --repo=<name>] [--push]     Build multi-arch image (amd64/arm64)
-  npm run docker:push       [-- --repo=<name>]             Push tagged images to Docker Hub
-  npm run docker:run        [-- --repo=<name>]             Run container locally in detached mode
+  npm run docker:build        [-- --repo=<name>]             Build local Docker image
+  npm run docker:build:alpha  [-- --repo=<name>]             Build local image tagged with alpha & canary
+  npm run docker:multiarch    [-- --repo=<name>] [--push]     Build multi-arch image (amd64/arm64)
+  npm run docker:push         [-- --repo=<name>]             Push release images to Docker Hub
+  npm run docker:push:alpha   [-- --repo=<name>]             Push alpha & canary images to Docker Hub
+  npm run docker:run          [-- --repo=<name>]             Run container locally in detached mode
 
 \x1b[1mOptions:\x1b[0m
   --repo=<name>         Target Docker Hub repository (default: hugokoo/dns-worker or $DOCKER_REPO)
                         Example: --repo=hugokoo/dns-worker
+  --alpha, --canary     Build/push with alpha and canary pre-release tags
   --platforms=<list>    Target platforms for multiarch build (default: linux/amd64,linux/arm64)
   --push                Immediately push images after building (used with multiarch)
 
@@ -133,8 +176,8 @@ Runtime: Bun LTS (oven/bun:1-slim)
  * @param repo - Target image name/repository.
  * @param version - Package version string.
  */
-function handleBuild(repo: string, version: string): void {
-  const tags = [`${repo}:latest`, `${repo}:${version}`, `${repo}:v${version}`];
+function handleBuild(repo: string, version: string, isAlpha: boolean): void {
+  const tags = getTags(repo, version, isAlpha);
   const args = ['build'];
   for (const tag of tags) {
     args.push('-t', tag);
@@ -149,13 +192,11 @@ function handleBuild(repo: string, version: string): void {
 
   console.log(`
 \x1b[32m✔ Successfully built Docker images:\x1b[0m
-  • ${repo}:latest
-  • ${repo}:${version}
-  • ${repo}:v${version}
+${tags.map(t => `  • ${t}`).join('\n')}
 
 Next steps:
   1. Test locally:   npm run docker:run -- --repo=${repo}
-  2. Push to Hub:    npm run docker:push -- --repo=${repo}
+  2. Push to Hub:    npm run docker:push -- --repo=${repo}${isAlpha ? ' --alpha' : ''}
 `);
 }
 
@@ -166,9 +207,10 @@ Next steps:
  * @param version - Package version string.
  * @param platforms - Target architectures (comma separated).
  * @param push - Whether to push to registry directly.
+ * @param isAlpha - Whether to build for alpha channel.
  */
-function handleMultiarch(repo: string, version: string, platforms: string, push: boolean): void {
-  const tags = [`${repo}:latest`, `${repo}:${version}`, `${repo}:v${version}`];
+function handleMultiarch(repo: string, version: string, platforms: string, push: boolean, isAlpha: boolean): void {
+  const tags = getTags(repo, version, isAlpha);
   const args = ['buildx', 'build', '--platform', platforms];
   for (const tag of tags) {
     args.push('-t', tag);
@@ -194,9 +236,10 @@ function handleMultiarch(repo: string, version: string, platforms: string, push:
  *
  * @param repo - Target image repository.
  * @param version - Package version string.
+ * @param isAlpha - Whether to push alpha channel tags.
  */
-function handlePush(repo: string, version: string): void {
-  const tags = [`${repo}:latest`, `${repo}:${version}`, `${repo}:v${version}`];
+function handlePush(repo: string, version: string, isAlpha: boolean): void {
+  const tags = getTags(repo, version, isAlpha);
   for (const tag of tags) {
     const result = execCommand('docker', ['push', tag]);
     if (result.status !== 0) {
@@ -263,7 +306,7 @@ Useful commands:
  */
 function main(): void {
   const rawArgs = process.argv.slice(2);
-  const { command, repo, platforms, push } = parseCliArgs(rawArgs);
+  const { command, repo, platforms, push, isAlpha } = parseCliArgs(rawArgs);
   const { version } = getPackageMeta();
 
   switch (command) {
@@ -271,17 +314,17 @@ function main(): void {
       showHelp();
       break;
     case 'multiarch':
-      handleMultiarch(repo, version, platforms, push);
+      handleMultiarch(repo, version, platforms, push, isAlpha);
       break;
     case 'push':
-      handlePush(repo, version);
+      handlePush(repo, version, isAlpha);
       break;
     case 'run':
       handleRun(repo);
       break;
     case 'build':
     default:
-      handleBuild(repo, version);
+      handleBuild(repo, version, isAlpha);
       break;
   }
 }
